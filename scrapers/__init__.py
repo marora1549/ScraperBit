@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-# scrapers/__init__.py - Module initialization
+# scrapers/__init__.py - Module initialization for target website scrapers
 
-# Import all scraper functions for easier access
+# Import all target website scrapers
 from scrapers.axis_direct import scrape_axis_direct
-from scrapers.icicidirect import scrape_icicidirect 
+from scrapers.icici_direct import scrape_icici_direct
 from scrapers.kotak_securities import scrape_kotak_securities
 from scrapers.fivepaisa import scrape_5paisa
 from scrapers.sharekhan import scrape_sharekhan
@@ -12,11 +12,21 @@ from scrapers.moneycontrol import scrape_moneycontrol
 # Define a mapping of website identifiers to their scraper functions
 scraper_mapping = {
     "axis_direct": scrape_axis_direct,
-    "icici_direct": scrape_icicidirect,
+    "icici_direct": scrape_icici_direct,
     "kotak_securities": scrape_kotak_securities,
-    "fivepaisa": scrape_5paisa,
+    "5paisa": scrape_5paisa,
     "sharekhan": scrape_sharekhan,
     "moneycontrol": scrape_moneycontrol
+}
+
+# Define URLs for each target website
+target_urls = {
+    "axis_direct": "https://simplehai.axisdirect.in/research/research-ideas/trade-ideas",
+    "icici_direct": "https://www.icicidirect.com/research/equity/investing-ideas",
+    "kotak_securities": "https://www.kotaksecurities.com/stock-research-recommendations/",
+    "5paisa": "https://www.5paisa.com/share-market-today/stocks-to-buy-or-sell-today",
+    "sharekhan": "https://old.sharekhan.com/research/latest-call/investor-research",
+    "moneycontrol": "https://www.moneycontrol.com/markets/stock-ideas/"
 }
 
 # Function to get the appropriate scraper function
@@ -31,3 +41,19 @@ def get_scraper(source_name):
         function: The corresponding scraper function or None if not found
     """
     return scraper_mapping.get(source_name)
+
+# Function to get URL for a source
+def get_url(source_name):
+    """
+    Get the URL for a given source name
+    
+    Args:
+        source_name (str): Identifier for the source/website
+        
+    Returns:
+        str: The corresponding URL or None if not found
+    """
+    return target_urls.get(source_name)
+
+# List of all target sources
+TARGET_SOURCES = list(target_urls.keys())

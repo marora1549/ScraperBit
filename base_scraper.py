@@ -79,6 +79,63 @@ def fetch_content_with_ab(url, timeout=30, retries=2):
         logger.error(f"Failed to fetch {url} after {retries} retries with AntiBlockingManager. Status: {status_code}, Error: {content}")
         return None
 
+def fetch_with_playwright_sync(url, timeout=30000):
+    """
+    Synchronous wrapper for fetching a URL using Playwright
+    
+    Args:
+        url (str): URL to scrape
+        timeout (int): Timeout in milliseconds
+        
+    Returns:
+        str: HTML content or None if failed
+    """
+    try:
+        import asyncio
+        from playwright.async_api import async_playwright
+        
+        async def _fetch_content():
+            html_content = None
+            try:
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(headless=True)
+                    context = await browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
+                    )
+                    
+                    # Create a new page
+                    page = await context.new_page()
+                    
+                    # Navigate to the URL
+                    await page.goto(url, wait_until="networkidle", timeout=timeout)
+                    
+                    # Get the HTML content
+                    html_content = await page.content()
+                    
+                    # Close the browser
+                    await browser.close()
+            except Exception as e:
+                logger.error(f"Error fetching with Playwright: {e}", exc_info=True)
+            
+            return html_content
+        
+        # Run the async function using the event loop
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        html_content = loop.run_until_complete(_fetch_content())
+        return html_content
+    
+    except ImportError:
+        logger.error("Playwright is not installed. Please install it with 'pip install playwright' and run 'playwright install'")
+        return None
+    except Exception as e:
+        logger.error(f"Error in fetch_with_playwright_sync: {e}", exc_info=True)
+        return None
+
 def extract_stock_details(text, source_url=None):
     """Extract stock details from text using advanced pattern matching"""
     result = {

@@ -1,87 +1,46 @@
 # ScraperBit Project Planning
 
-## Project Objective
-Develop a specialized stock leads scraper system that extracts potential investment opportunities from financial websites, focusing on identifying stocks with 7-15% growth potential.
+## Project Overview
+ScraperBit is a stock tip scraper that extracts investment recommendations from various financial websites. The project currently scrapes 6 websites, with 3 working successfully (Axis Direct, ICICI Direct, and 5Paisa).
 
-## System Architecture
+## Requirements
+Based on client requirements, we need to:
 
-### Core Components
-1. **Web Scraping Engine**: Handles fetching content from financial websites with anti-blocking capabilities
-2. **Data Extraction Module**: Parses HTML content to extract stock details
-3. **Data Processing Module**: Filters and processes extracted stock information
-4. **Results Management**: Saves and presents the extracted information
+1. **Retain Working Scrapers:**
+   - Axis Direct
+   - ICICI Direct 
+   - 5Paisa
 
-### Modular Design (Implemented)
-1. **Base Module (base_scraper.py)**: Core functionality, utility functions, and common scraping methods
-2. **Website-Specific Scrapers (scrapers/*.py)**: Individual scraper modules for each financial website
-3. **Data Processing (data_processing.py)**: Functions for filtering, scoring, and organizing extracted stock data
-4. **Runner Module (run_stock_finder.py)**: Main execution script that coordinates the scraping process
+2. **Remove Non-Essential Scrapers:**
+   - Kotak Securities
+   - Sharekhan
 
-## Current Status & Next Phases
+3. **Fix MoneyControl Scraper:**
+   - Implement or fix the MoneyControl scraper to extract stock tips successfully
 
-### Phase 1: Initial Setup & Core Implementation (Completed ✅)
-- Project structure created
-- Core functionality implemented
-- Initial website testing completed
+4. **Remove Growth Range Filter:**
+   - Remove the 7-15% profit range filter to display all stock recommendations
 
-### Phase 2: Modularization (Completed ✅)
-- Modular architecture implemented
-- Specialized scrapers for Economic Times, LiveMint, 5paisa, and MoneyControl created
-- Verification testing system implemented
+5. **Keep JSON Output Format Only:**
+   - The output should only use JSON format since this will eventually be used as an API endpoint
 
-### Phase 3: Scraper Refinement (Current Phase 🔄)
-- Debug and fix existing scrapers that aren't working (0/3 completed)
-- Analyze website structures in detail to improve extraction logic
-- Implement more robust fallback mechanisms
-- Enhance text analysis for better stock recommendation detection
+## Technical Approach
 
-### Phase 4: Expansion (Next Phase)
-- Implement specialized scrapers for remaining financial websites (0/8 completed)
-- Create a generic scraper for unknown websites
-- Focus on sites with structured data first, then move to more complex ones
+### Code Structure Modifications
+1. Update the `scrapers/__init__.py` file to remove the dropped scrapers
+2. Fix the MoneyControl scraper implementation
+3. Modify the data processing module to remove the growth range filter
+4. Update the main scraper runner to maintain only JSON output
 
-### Phase 5: System Integration & Optimization
-- Ensure all scrapers work together correctly
-- Optimize performance and reliability
-- Create comprehensive reporting system
-- Implement error monitoring and notification system
+### Testing Approach
+1. Test each scraper independently to verify functionality
+2. Test the end-to-end flow to ensure all components work together correctly
 
-## Technical Requirements
-- Python 3.x
-- BeautifulSoup for HTML parsing
-- Pandas for data management
-- Concurrent processing for improved performance
-- Anti-blocking measures for reliable web access
+### Output Format
+Focus on a clean, consistent JSON structure for all outputs, removing CSV and other formats.
 
-## Growth Potential Focus
-- Implement specific filters to identify stocks with 7-15% growth potential
-- Calculate and prioritize stocks within this growth range
-- Enhance confidence scoring to favor stocks in the target growth range
-
-## Website-Specific Strategies
-
-### Working Websites:
-1. **5paisa**: Utilizes table structures for clean data extraction. Continue using this approach.
-
-### Non-Working Websites - Improvement Strategies:
-1. **Economic Times**: 
-   - Implement multiple parsing approaches
-   - Focus on detecting price patterns in text
-   - Extract data from tables when available
-   - Consider using more aggressive text analysis
-
-2. **LiveMint**: 
-   - Improve text analysis for stock recommendations
-   - Use more flexible pattern matching
-   - Focus on paragraphs that contain both stock names and price information
-
-3. **MoneyControl**: 
-   - Address potential anti-scraping measures
-   - Implement more specialized text parsing
-   - Use multiple fallback mechanisms
-
-## Testing & Verification Process
-1. Individual website testing with test_url.py
-2. Debug information extraction with debug scripts
-3. Verification of extracted data quality
-4. Comprehensive testing across all websites
+## Timeline
+1. Environment setup and code analysis (Complete)
+2. Implementation of required changes
+3. Testing and validation
+4. Documentation and delivery

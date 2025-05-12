@@ -30,33 +30,30 @@ def filter_quality_tips(stock_tips, min_confidence=0.7):
     logger.info(f"Filtered {len(quality_tips)} quality stock tips out of {len(stock_tips)} total tips")
     return quality_tips
 
-def filter_target_growth(stock_tips, min_growth=7, max_growth=15):
+def filter_target_growth(stock_tips, min_growth=None, max_growth=None):
     """
-    Filter stock tips by target growth percentage range
+    Process stock tips with growth information, no longer filtering by range
     
     Args:
         stock_tips (list): List of stock tip dictionaries
-        min_growth (float): Minimum growth percentage
-        max_growth (float): Maximum growth percentage
+        min_growth (float, optional): Minimum growth percentage (not used, kept for backward compatibility)
+        max_growth (float, optional): Maximum growth percentage (not used, kept for backward compatibility)
         
     Returns:
-        list: Filtered list of stock tips within target growth range
+        list: All stock tips sorted by confidence score
     """
     if not stock_tips:
         return []
     
-    # Filter for stocks with growth percentage in the target range
-    target_growth_tips = [
-        tip for tip in stock_tips 
-        if tip.get('growth_percent') is not None 
-        and min_growth <= tip.get('growth_percent', 0) <= max_growth
-    ]
+    # Instead of filtering, we'll just sort the tips by confidence level
+    # Including all stocks regardless of growth percentage
+    processed_tips = [tip for tip in stock_tips if tip.get('growth_percent') is not None]
     
     # Sort by confidence (descending)
-    target_growth_tips = sorted(target_growth_tips, key=lambda x: x.get('confidence', 0), reverse=True)
+    processed_tips = sorted(processed_tips, key=lambda x: x.get('confidence', 0), reverse=True)
     
-    logger.info(f"Found {len(target_growth_tips)} stock tips in the {min_growth}-{max_growth}% growth range")
-    return target_growth_tips
+    logger.info(f"Processed {len(processed_tips)} stock tips with growth information")
+    return processed_tips
 
 # Keep the original function name as an alias for backward compatibility
 def filter_target_growth_tips(stock_tips, min_growth=7, max_growth=15):

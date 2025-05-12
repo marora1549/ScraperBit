@@ -51,6 +51,25 @@ def scrape_website(source_name):
         logger.error(f"No URL found for {source_name}")
         return []
     
+    # Special handling for MoneyControl (uses Playwright)
+    if source_name == "moneycontrol":
+        try:
+            from scrapers.moneycontrol import run_moneycontrol_scraper
+            
+            logger.info(f"Using Playwright-based scraper for {source_name}")
+            start_time = time.time()
+            stock_tips = run_moneycontrol_scraper(url)
+            scrape_time = time.time() - start_time
+            logger.info(f"Successfully scraped {len(stock_tips)} stock tips from {source_name} using Playwright in {scrape_time:.2f} seconds")
+            return stock_tips
+        except ImportError:
+            logger.error(f"Couldn't import Playwright-based scraper for {source_name}. Falling back to regular scraper.")
+            # Fall back to regular scraping if Playwright is not available
+        except Exception as e:
+            logger.error(f"Error executing Playwright-based scraper for {source_name}: {e}", exc_info=True)
+            return []
+    
+    # Regular scraping for other sources
     # Fetch the HTML content
     start_time = time.time()
     html_content = fetch_content_with_ab(url)
@@ -91,7 +110,7 @@ def scrape_website(source_name):
 
 def save_results(stock_tips, filename, output_dir):
     """
-    Save stock tips to CSV and JSON files
+    Save stock tips to JSON file
     
     Args:
         stock_tips (list): List of stock tip dictionaries
@@ -99,18 +118,17 @@ def save_results(stock_tips, filename, output_dir):
         output_dir (str): Directory to save files
         
     Returns:
-        tuple: Paths to the saved files (json_path, csv_path)
+        str: Path to the saved JSON file or None if save failed
     """
     if not stock_tips:
         logger.warning(f"No stock tips to save for {filename}")
-        return None, None
+        return None
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
-    # Define file paths
+    # Define file path
     json_path = os.path.join(output_dir, f"{filename}.json")
-    csv_path = os.path.join(output_dir, f"{filename}.csv")
     
     # Save as JSON
     try:
@@ -121,16 +139,7 @@ def save_results(stock_tips, filename, output_dir):
         logger.error(f"Error saving JSON results: {e}")
         json_path = None
     
-    # Save as CSV
-    try:
-        df = pd.DataFrame(stock_tips)
-        df.to_csv(csv_path, index=False)
-        logger.info(f"Saved CSV results to {csv_path}")
-    except Exception as e:
-        logger.error(f"Error saving CSV results: {e}")
-        csv_path = None
-    
-    return json_path, csv_path
+    return json_path
 
 def create_summary_report(results, output_dir):
     """
@@ -161,8 +170,8 @@ def create_summary_report(results, output_dir):
         if source_tips:
             all_tips.extend(source_tips)
     
-    # Get target growth tips
-    target_growth_tips = filter_target_growth(all_tips)
+    # Process tips with growth information
+    processed_tips = filter_target_growth(all_tips)
     
     # Create report content
     report_content = f"""# Stock Scraper Summary Report
@@ -172,7 +181,6 @@ def create_summary_report(results, output_dir):
 - **Total Websites Scraped:** {total_sources}
 - **Successfully Scraped Websites:** {successful_sources}
 - **Total Stock Tips Found:** {total_tips}
-- **Stock Tips in Target Growth Range (7-15%):** {len(target_growth_tips)}
 
 ## Details by Source
 
@@ -181,7 +189,6 @@ def create_summary_report(results, output_dir):
     # Add details for each source
     for source_name, tips in results.items():
         tip_count = len(tips) if tips else 0
-        target_growth_count = len(filter_target_growth(tips)) if tips else 0
         
         # Get the URL for this source
         url = get_url(source_name)
@@ -189,7 +196,6 @@ def create_summary_report(results, output_dir):
         report_content += f"### {source_name}\n"
         report_content += f"- **URL:** {url}\n"
         report_content += f"- **Total Tips:** {tip_count}\n"
-        report_content += f"- **Tips in Target Range:** {target_growth_count}\n"
         
         # Include sample tips if available
         if tips and tip_count > 0:
@@ -210,14 +216,14 @@ def create_summary_report(results, output_dir):
         
         report_content += "\n"
     
-    # Add section for target growth tips
-    if target_growth_tips:
-        report_content += f"## Top Tips in Target Growth Range (7-15%)\n\n"
+    # Add section for top ranked tips
+    if processed_tips:
+        report_content += f"## Top Ranked Stock Tips\n\n"
         report_content += "| Symbol | Company | Entry Price | Target Price | Growth % | Source |\n"
         report_content += "|--------|---------|-------------|--------------|----------|--------|\n"
         
         # Sort by confidence
-        sorted_tips = sorted(target_growth_tips, 
+        sorted_tips = sorted(processed_tips, 
                            key=lambda x: (x.get('confidence', 0), x.get('growth_percent', 0)), 
                            reverse=True)
         
@@ -274,18 +280,15 @@ def print_summary(results):
         if source_tips:
             all_tips.extend(source_tips)
     
-    # Print target growth info
-    target_growth_tips = filter_target_growth(all_tips)
-    print(f"\nStock Tips in Target Growth Range (7-15%): {len(target_growth_tips)}")
+    # Process and print top tips
+    all_sorted_tips = sorted(all_tips, 
+                       key=lambda x: (x.get('confidence', 0), x.get('growth_percent', 0) if x.get('growth_percent') is not None else 0), 
+                       reverse=True)
     
     # Print top tips
-    if target_growth_tips:
-        print("\nTop Tips in Target Range:")
-        sorted_tips = sorted(target_growth_tips, 
-                           key=lambda x: (x.get('confidence', 0), x.get('growth_percent', 0)), 
-                           reverse=True)
-        
-        for i, tip in enumerate(sorted_tips[:5]):
+    if all_sorted_tips:
+        print("\nTop Stock Tips:")
+        for i, tip in enumerate(all_sorted_tips[:5]):
             symbol = tip.get('symbol', 'N/A')
             company = tip.get('company_name', 'N/A')
             if company and len(company) > 30:
@@ -352,11 +355,6 @@ def run_scrapers(sources=None, output_base_dir="output"):
     # Save combined results
     if all_stock_tips:
         save_results(all_stock_tips, "all_sources", output_dir)
-        
-        # Generate and save target growth results
-        target_growth_tips = filter_target_growth(all_stock_tips)
-        if target_growth_tips:
-            save_results(target_growth_tips, "target_growth", output_dir)
     
     # Create summary report
     create_summary_report(results, output_dir)

@@ -1,15 +1,61 @@
 #!/usr/bin/env python3
-# moneycontrol.py - Specialized scraper for MoneyControl
+# moneycontrol.py - Specialized scraper for MoneyControl using Playwright
 
 import re
+import json
 import logging
+import asyncio
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from datetime import datetime
+from playwright.async_api import async_playwright
 
 from base_scraper import clean_price, calculate_growth_percent, is_target_growth_range
 
 logger = logging.getLogger(__name__)
+
+async def fetch_with_playwright(url, timeout=30000):
+    """
+    Fetch a URL using Playwright with proper handling of JavaScript-loaded content
+    
+    Args:
+        url (str): URL to scrape
+        timeout (int): Timeout in milliseconds
+        
+    Returns:
+        str: HTML content or None if failed
+    """
+    html_content = None
+    
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
+            )
+            
+            # Create a new page
+            page = await context.new_page()
+            
+            # Navigate to the URL
+            await page.goto(url, wait_until="networkidle", timeout=timeout)
+            
+            # Wait for stock recommendation cards to load
+            try:
+                await page.wait_for_selector('.InfoCardsSec_web_stckCard__X8CAV', timeout=10000)
+            except:
+                logger.warning("Timed out waiting for stock cards to load. Will attempt to parse what's available.")
+            
+            # Get the HTML content
+            html_content = await page.content()
+            
+            # Close the browser
+            await browser.close()
+    
+    except Exception as e:
+        logger.error(f"Error fetching with Playwright: {e}", exc_info=True)
+    
+    return html_content
 
 def scrape_moneycontrol(soup, url):
     """
@@ -22,325 +68,198 @@ def scrape_moneycontrol(soup, url):
     Returns:
         list: List of stock tips extracted from the page
     """
+    # For static use - if soup is provided, use it
+    # For real usage, the run_stock_scrapers.py will call the async version
     stock_tips = []
     domain = "moneycontrol.com"
     
-    # APPROACH 1: Look for stock recommendation cards
-    stock_cards = soup.find_all(['div', 'article'], 
-                         class_=re.compile(r'(card|stockCardCont|story_list|article_box|stock-idea)', re.I))
-    
-    logger.info(f"Found {len(stock_cards)} potential stock cards in MoneyControl")
-    
-    for card in stock_cards:
-        try:
-            # Skip if too small to be a recommendation card
-            card_text = card.get_text(strip=True)
-            if not card_text or len(card_text) < 50:
-                continue
-            
-            # Check if it contains stock recommendation keywords
-            if not re.search(r'(buy|sell|hold|target|recommendation|call|price)', card_text.lower()):
-                continue
-            
-            # Extract recommendation date if available
-            date_element = card.find(['span', 'div'], string=re.compile(r'Reco on', re.I)) or \
-                          card.find(['span', 'div'], class_=re.compile(r'(date|time)', re.I))
-            
-            # Extract symbol/stock name from heading
-            heading = card.find(['h1', 'h2', 'h3', 'h4', 'a'], class_=re.compile(r'(heading|title|headline)', re.I))
-            if not heading:
-                heading = card.find(['h1', 'h2', 'h3', 'h4', 'a'])
-            
-            heading_text = heading.get_text(strip=True) if heading else ""
-            
-            # If no clear heading, try other approaches to find stock name
-            if not heading_text:
-                subheadings = card.find_all(['h5', 'h6', 'strong', 'b'])
-                for subheading in subheadings:
-                    if len(subheading.get_text(strip=True)) > 0:
-                        heading_text = subheading.get_text(strip=True)
-                        break
-            
-            company_name = None
-            symbol = None
-            
-            # Extract company name and symbol from heading
-            if heading_text:
-                # Check for stock symbol pattern
-                symbol_match = re.search(r'\b([A-Z]{2,5})\b', heading_text)
-                if symbol_match:
-                    symbol = symbol_match.group(1)
-                    if symbol in ['BUY', 'SELL', 'HOLD']:  # Skip if it's just a recommendation
-                        symbol = None
-                
-                # Get company name from heading
-                company_name = heading_text
-            
-            # If no symbol from heading, look in the card text
-            if not symbol:
-                symbol_matches = re.findall(r'\b([A-Z]{2,5})\b', card_text)
-                filtered_symbols = [s for s in symbol_matches if s not in ['BUY', 'SELL', 'HOLD', 'CMP', 'NSE', 'BSE']]
-                if filtered_symbols:
-                    symbol = filtered_symbols[0]
-            
-            # Determine recommendation type
-            recommendation = "buy"  # Default to buy
-            
-            if re.search(r'\b(buy|bullish|accumulate)\b', card_text.lower()):
-                recommendation = 'buy'
-            elif re.search(r'\b(sell|bearish|reduce)\b', card_text.lower()):
-                recommendation = 'sell'
-            elif re.search(r'\b(hold|neutral)\b', card_text.lower()):
-                recommendation = 'hold'
-            
-            # Extract prices using various approaches
-            
-            # 1. Look for labeled price sections
-            price_elements = []
-            
-            # Check for price labels
-            price_elements = card.find_all(['div', 'span', 'p'], 
-                                   string=re.compile(r'(CMP|Current Price|Target Price|Stop Loss)', re.I))
-            
-            current_price = None
-            target_price = None
-            stop_loss = None
-            
-            for elem in price_elements:
-                elem_text = elem.get_text(strip=True)
-                
-                if re.search(r'CMP|Current Price', elem_text, re.I):
-                    price_match = re.search(r'(\d+(?:,\d+)*(?:\.\d+)?)', elem_text)
-                    if price_match:
-                        current_price = clean_price(price_match.group(1))
-                
-                elif re.search(r'Target', elem_text, re.I):
-                    price_match = re.search(r'(\d+(?:,\d+)*(?:\.\d+)?)', elem_text)
-                    if price_match:
-                        target_price = clean_price(price_match.group(1))
-                
-                elif re.search(r'Stop Loss|SL', elem_text, re.I):
-                    price_match = re.search(r'(\d+(?:,\d+)*(?:\.\d+)?)', elem_text)
-                    if price_match:
-                        stop_loss = clean_price(price_match.group(1))
-            
-            # 2. If specific labels don't work, try pattern matching in the full text
-            if not current_price:
-                cmp_match = re.search(r'(?:CMP|Current Price)[:\s]*(?:Rs\.?|₹)?\s*(\d+(?:,\d+)*(?:\.\d+)?)', card_text, re.I)
-                if cmp_match:
-                    current_price = clean_price(cmp_match.group(1))
-            
-            if not target_price:
-                target_match = re.search(r'(?:Target)[:\s]*(?:Rs\.?|₹)?\s*(\d+(?:,\d+)*(?:\.\d+)?)', card_text, re.I)
-                if target_match:
-                    target_price = clean_price(target_match.group(1))
-            
-            if not stop_loss:
-                sl_match = re.search(r'(?:Stop Loss|SL)[:\s]*(?:Rs\.?|₹)?\s*(\d+(?:,\d+)*(?:\.\d+)?)', card_text, re.I)
-                if sl_match:
-                    stop_loss = clean_price(sl_match.group(1))
-            
-            # 3. If specific patterns don't work, try to find all prices and make educated guesses
-            if not current_price or not target_price:
-                price_matches = re.findall(r'(?:Rs\.?|₹)?\s*(\d+(?:,\d+)*(?:\.\d+)?)', card_text)
-                prices = [clean_price(p) for p in price_matches if clean_price(p) is not None]
-                
-                if len(prices) >= 2 and not current_price and not target_price:
-                    # Assume first is current, second is target
-                    current_price = prices[0]
-                    target_price = prices[1]
-                    
-                    # If there's a third price and no stop loss, it might be the stop loss
-                    if len(prices) >= 3 and not stop_loss:
-                        stop_loss = min(prices[2:])  # Use the smallest remaining price as stop loss
-            
-            # Calculate growth percentage
-            growth_percent = None
-            if current_price and target_price and current_price > 0:
-                growth_percent = calculate_growth_percent(current_price, target_price)
-                growth_percent = round(growth_percent, 2) if growth_percent is not None else None
-            
-            # Create stock details if we have enough info
-            if (symbol or company_name) and (current_price or target_price):
-                # Calculate confidence based on data completeness
-                confidence = 0.6  # Base level for card data
-                if symbol:
-                    confidence = 0.65
-                if current_price and target_price:
-                    confidence = 0.75
-                if stop_loss:
-                    confidence = 0.8
-                
-                # Bonus confidence if in target range
-                if is_target_growth_range(growth_percent):
-                    confidence = min(confidence + 0.15, 1.0)
-                
-                stock_details = {
-                    'symbol': symbol,
-                    'company_name': company_name,
-                    'entry_price': current_price,
-                    'target_price': target_price,
-                    'stop_loss': stop_loss,
-                    'growth_percent': growth_percent,
-                    'recommendation_type': recommendation,
-                    'source': domain,
-                    'url': url,
-                    'date': datetime.now().strftime('%Y-%m-%d'),
-                    'confidence': confidence
-                }
-                
-                stock_tips.append(stock_details)
-        except Exception as e:
-            logger.error(f"Error processing MoneyControl card: {e}", exc_info=True)
-    
-    # APPROACH 2: Look for stock tables
-    tables = soup.find_all('table')
-    logger.info(f"Found {len(tables)} tables in MoneyControl")
-    
-    for table_idx, table in enumerate(tables):
-        try:
-            rows = table.find_all('tr')
-            if len(rows) <= 1:  # Skip if just a header row
-                continue
-            
-            # Check if this looks like a stock recommendation table
-            header_row = rows[0]
-            headers = [th.get_text(strip=True).lower() for th in header_row.find_all(['th', 'td'])]
-            
-            # Check if headers indicate stock data
-            if not any(h in ['stock', 'company', 'symbol', 'reco', 'target', 'price'] for h in headers):
-                continue
-            
-            # Map columns to expected data
-            col_map = {}
-            for i, header in enumerate(headers):
-                if any(kw in header for kw in ['company', 'stock', 'scrip']):
-                    col_map['company'] = i
-                elif any(kw in header for kw in ['cmp', 'price', 'ltp', 'current']):
-                    col_map['cmp'] = i
-                elif any(kw in header for kw in ['target']):
-                    col_map['target'] = i
-                elif any(kw in header for kw in ['stop', 'sl']):
-                    col_map['stop_loss'] = i
-                elif any(kw in header for kw in ['view', 'recommendation', 'call']):
-                    col_map['recommendation'] = i
-            
-            # Process data rows
-            data_rows = rows[1:]  # Skip header
-            
-            for row_idx, row in enumerate(data_rows):
-                cells = row.find_all(['td', 'th'])
-                if len(cells) < 3:  # Need minimum cells for meaningful data
-                    continue
-                
-                # Extract data based on column positions or mapping
-                company_name = cells[col_map.get('company', 0)].get_text(strip=True) if 'company' in col_map else cells[0].get_text(strip=True)
-                
-                # Try to extract symbol from company name
+    try:
+        # Extract stock recommendation cards using the structure observed in the HTML
+        recommendation_blocks = soup.select('.InfoCardsSec_web_stckCard__X8CAV')
+        
+        logger.info(f"Found {len(recommendation_blocks)} stock recommendation cards in MoneyControl")
+        
+        for block in recommendation_blocks:
+            try:
+                # Initialize variables
                 symbol = None
-                symbol_match = re.search(r'\b([A-Z]{2,5})\b', company_name)
-                if symbol_match:
-                    symbol = symbol_match.group(1)
-                    if symbol in ['BUY', 'SELL', 'HOLD']:  # Skip if it's just a recommendation
-                        symbol = None
-                
-                # Extract prices
-                current_price = None
+                company_name = None
+                entry_price = None
                 target_price = None
                 stop_loss = None
-                
-                # Use column mapping if available
-                if 'cmp' in col_map and col_map['cmp'] < len(cells):
-                    current_price = clean_price(cells[col_map['cmp']].get_text(strip=True))
-                
-                if 'target' in col_map and col_map['target'] < len(cells):
-                    target_price = clean_price(cells[col_map['target']].get_text(strip=True))
-                
-                if 'stop_loss' in col_map and col_map['stop_loss'] < len(cells):
-                    stop_loss = clean_price(cells[col_map['stop_loss']].get_text(strip=True))
-                
-                # If mapping doesn't work, try to determine prices from cell text
-                if not current_price and not target_price:
-                    # Collect all prices from the row
-                    all_prices = []
-                    for cell in cells:
-                        price_matches = re.findall(r'(\d+(?:,\d+)*(?:\.\d+)?)', cell.get_text(strip=True))
-                        if price_matches:
-                            price = clean_price(price_matches[0])
-                            if price:
-                                all_prices.append(price)
-                    
-                    # If we found at least two prices, assume first is current, second is target
-                    if len(all_prices) >= 2:
-                        current_price = all_prices[0]
-                        target_price = all_prices[1]
-                
-                # Determine recommendation type
-                rec_type = "buy"  # Default
-                
-                for cell in cells:
-                    cell_text = cell.get_text(strip=True).lower()
-                    if 'buy' in cell_text or 'bullish' in cell_text:
-                        rec_type = 'buy'
-                        break
-                    elif 'sell' in cell_text or 'bearish' in cell_text:
-                        rec_type = 'sell'
-                        break
-                    elif 'hold' in cell_text or 'neutral' in cell_text:
-                        rec_type = 'hold'
-                        break
-                
-                # Calculate growth percentage
+                recommendation_type = None
                 growth_percent = None
-                if current_price and target_price and current_price > 0:
-                    growth_percent = calculate_growth_percent(current_price, target_price)
+                               
+                # Extract recommendation date
+                reco_date_elem = block.select_one('.InfoCardsSec_web_recoTxt___V6m0')
+                reco_date = None
+                if reco_date_elem:
+                    date_match = re.search(r'Reco on : (.+?)$', reco_date_elem.text)
+                    if date_match:
+                        reco_date = date_match.group(1).strip()
+                
+                # Extract stock name and symbol
+                company_elem = block.select_one('.InfoCardsSec_web_comTitle__cZ083 a')
+                if company_elem:
+                    company_name = company_elem.text.strip()
+                    company_url = company_elem.get('href', '')
+                    # Extract symbol from URL
+                    symbol_match = re.search(r'/([A-Z0-9]{2,8})$', company_url)
+                    if symbol_match:
+                        symbol = symbol_match.group(1)
+                
+                # Extract recommendation type (Buy/Sell/Hold)
+                buy_elem = block.select_one('.InfoCardsSec_web_buy__0pluJ')
+                sell_elem = block.select_one('.InfoCardsSec_web_sell__RiuGp')
+                hold_elem = block.select_one('.InfoCardsSec_web_hold__HVdXo')
+                
+                if buy_elem:
+                    recommendation_type = 'buy'
+                elif sell_elem:
+                    recommendation_type = 'sell'
+                elif hold_elem:
+                    recommendation_type = 'hold'
+                else:
+                    recommendation_type = 'buy'  # Default to buy
+                
+                # Extract price information from table
+                price_table = block.select_one('.InfoCardsSec_web_dnTAble__XQgQl')
+                if price_table:
+                    # Extract recommendation price
+                    reco_price_elem = price_table.select_one('li:nth-child(1) span')
+                    if reco_price_elem:
+                        entry_price = clean_price(reco_price_elem.text.strip())
+                    
+                    # Extract target price
+                    target_elem = price_table.select_one('li:nth-child(2) span')
+                    if target_elem:
+                        # Extract the target price and growth percentage
+                        target_text = target_elem.text.strip()
+                        target_match = re.search(r'(\d+(?:,\d+)*(?:\.\d+)?)\s*\(([+-]?\d+(?:\.\d+)?)%\)', target_text)
+                        
+                        if target_match:
+                            target_price = clean_price(target_match.group(1))
+                            growth_percent = float(target_match.group(2))
+                        else:
+                            # Try simpler pattern
+                            target_match = re.search(r'(\d+(?:,\d+)*(?:\.\d+)?)', target_text)
+                            if target_match:
+                                target_price = clean_price(target_match.group(1))
+                    
+                    # Extract returns
+                    returns_elem = price_table.select_one('li:nth-child(3) span')
+                    if returns_elem:
+                        returns_text = returns_elem.text.strip()
+                        # We don't use this currently but might be useful in future
+                
+                # Extract PDF research link if available
+                pdf_elem = block.select_one('a.InfoCardsSec_web_pdfBtn__LQ71I')
+                research_url = None
+                research_by = None
+                if pdf_elem:
+                    research_url = pdf_elem.get('href', '')
+                    research_by_elem = pdf_elem.select_one('p')
+                    if research_by_elem:
+                        research_by = research_by_elem.text.replace('Research by', '').strip()
+                
+                # Calculate growth percentage if not already found
+                if entry_price and target_price and entry_price > 0 and not growth_percent:
+                    growth_percent = calculate_growth_percent(entry_price, target_price)
                     growth_percent = round(growth_percent, 2) if growth_percent is not None else None
                 
                 # Create stock details if we have enough info
-                if (symbol or company_name) and (current_price or target_price):
+                if (symbol or company_name) and (entry_price or target_price):
                     # Calculate confidence based on data completeness
-                    confidence = 0.7  # Base level for table data
+                    confidence = 0.7  # Base level
                     if symbol:
-                        confidence = 0.75
-                    if current_price and target_price:
-                        confidence = 0.85
-                    
-                    # Bonus confidence if in target range
-                    if is_target_growth_range(growth_percent):
-                        confidence = min(confidence + 0.15, 1.0)
+                        confidence = max(confidence, 0.75)
+                    if entry_price and target_price:
+                        confidence = max(confidence, 0.85)
+                    if research_url:
+                        confidence = max(confidence, 0.9)  # Higher confidence if research PDF available
                     
                     stock_details = {
                         'symbol': symbol,
                         'company_name': company_name,
-                        'entry_price': current_price,
+                        'entry_price': entry_price,
                         'target_price': target_price,
-                        'stop_loss': stop_loss,
                         'growth_percent': growth_percent,
-                        'recommendation_type': rec_type,
+                        'recommendation_type': recommendation_type,
                         'source': domain,
                         'url': url,
-                        'date': datetime.now().strftime('%Y-%m-%d'),
+                        'research_url': research_url,
+                        'research_by': research_by,
+                        'recommendation_date': reco_date,
+                        'date_extracted': datetime.now().strftime('%Y-%m-%d'),
                         'confidence': confidence
                     }
                     
                     stock_tips.append(stock_details)
-        except Exception as e:
-            logger.error(f"Error processing MoneyControl table {table_idx}: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"Error processing MoneyControl recommendation block: {e}", exc_info=True)
+    
+    except Exception as e:
+        logger.error(f"Error processing MoneyControl page: {e}", exc_info=True)
     
     # Deduplicate based on symbol
     final_tips = []
     seen_symbols = set()
     
-    for tip in stock_tips:
+    # Sort by confidence (highest first)
+    sorted_tips = sorted(stock_tips, key=lambda x: (x.get('confidence', 0)), reverse=True)
+    
+    for tip in sorted_tips:
         symbol = tip.get('symbol')
         if symbol and symbol not in seen_symbols:
             final_tips.append(tip)
             seen_symbols.add(symbol)
-        elif not symbol and tip not in final_tips:  # If no symbol, check complete object
-            final_tips.append(tip)
+        elif not symbol and tip.get('company_name') and tip not in final_tips:
+            # If no symbol but has company name, use company name for deduplication
+            if not any(t.get('company_name') == tip.get('company_name') for t in final_tips):
+                final_tips.append(tip)
     
     logger.info(f"Extracted {len(final_tips)} stock tips from MoneyControl")
     return final_tips
+
+async def fetch_and_scrape_moneycontrol(url):
+    """
+    Fetch and scrape MoneyControl website using Playwright
+    
+    Args:
+        url (str): URL to scrape
+        
+    Returns:
+        list: List of stock tips
+    """
+    html_content = await fetch_with_playwright(url)
+    
+    if not html_content:
+        logger.error(f"Failed to fetch HTML content from {url}")
+        return []
+    
+    soup = BeautifulSoup(html_content, 'html.parser')
+    stock_tips = scrape_moneycontrol(soup, url)
+    
+    return stock_tips
+
+def run_moneycontrol_scraper(url):
+    """
+    Run the MoneyControl scraper as a standalone function
+    
+    Args:
+        url (str): URL to scrape
+        
+    Returns:
+        list: List of stock tips
+    """
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    stock_tips = loop.run_until_complete(fetch_and_scrape_moneycontrol(url))
+    return stock_tips
 
 # For testing the module directly
 if __name__ == "__main__":
@@ -353,21 +272,26 @@ if __name__ == "__main__":
     # Test URL
     test_url = "https://www.moneycontrol.com/markets/stock-ideas/"
     
-    # Fetch HTML
-    from base_scraper import fetch_content_with_ab
-    html_content = fetch_content_with_ab(test_url)
+    # Run the scraper
+    stock_tips = run_moneycontrol_scraper(test_url)
     
-    if html_content:
-        # Parse HTML
-        soup = BeautifulSoup(html_content, 'html.parser')
+    # Print results
+    print(f"\nFound {len(stock_tips)} stock tips from MoneyControl:")
+    for i, tip in enumerate(stock_tips[:5]):  # Print first 5 tips
+        symbol = tip.get('symbol', 'N/A')
+        company = tip.get('company_name', 'N/A')
+        entry = tip.get('entry_price', 'N/A')
+        target = tip.get('target_price', 'N/A')
+        growth = tip.get('growth_percent', 'N/A')
+        growth_str = f"{growth}%" if growth is not None else 'N/A'
+        rec_type = tip.get('recommendation_type', 'N/A')
         
-        # Extract stock tips
-        stock_tips = scrape_moneycontrol(soup, test_url)
-        
-        # Print results
-        print(f"\nFound {len(stock_tips)} stock tips from MoneyControl:")
-        for i, tip in enumerate(stock_tips):
-            growth_str = f"{tip['growth_percent']}%" if tip['growth_percent'] is not None else "N/A"
-            print(f"{i+1}. {tip.get('company_name')} ({tip.get('symbol')}) - Entry: {tip['entry_price']}, Target: {tip['target_price']}, Growth: {growth_str}")
-    else:
-        print("Failed to fetch content from MoneyControl")
+        print(f"{i+1}. {company} ({symbol})")
+        print(f"   Entry: {entry}, Target: {target}, Growth: {growth_str}")
+        print(f"   Recommendation: {rec_type}")
+        print("")
+    
+    # Save results to JSON
+    if stock_tips:
+        with open("moneycontrol_test_results.json", "w", encoding="utf-8") as f:
+            json.dump(stock_tips, f, indent=2)

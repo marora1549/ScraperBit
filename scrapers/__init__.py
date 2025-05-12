@@ -4,18 +4,14 @@
 # Import all target website scrapers
 from scrapers.axis_direct import scrape_axis_direct
 from scrapers.icici_direct import scrape_icici_direct
-from scrapers.kotak_securities import scrape_kotak_securities
 from scrapers.fivepaisa import scrape_5paisa
-from scrapers.sharekhan import scrape_sharekhan
 from scrapers.moneycontrol import scrape_moneycontrol
 
 # Define a mapping of website identifiers to their scraper functions
 scraper_mapping = {
     "axis_direct": scrape_axis_direct,
     "icici_direct": scrape_icici_direct,
-    "kotak_securities": scrape_kotak_securities,
     "5paisa": scrape_5paisa,
-    "sharekhan": scrape_sharekhan,
     "moneycontrol": scrape_moneycontrol
 }
 
@@ -23,9 +19,7 @@ scraper_mapping = {
 target_urls = {
     "axis_direct": "https://simplehai.axisdirect.in/research/research-ideas/trade-ideas",
     "icici_direct": "https://www.icicidirect.com/research/equity/investing-ideas",
-    "kotak_securities": "https://www.kotaksecurities.com/stock-research-recommendations/",
     "5paisa": "https://www.5paisa.com/share-market-today/stocks-to-buy-or-sell-today",
-    "sharekhan": "https://old.sharekhan.com/research/latest-call/investor-research",
     "moneycontrol": "https://www.moneycontrol.com/markets/stock-ideas/"
 }
 
